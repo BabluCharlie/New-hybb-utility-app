@@ -10,8 +10,9 @@ import pandas as pd
 # CONFIG
 SHEET_NAME = "Hybb Utility System"
 WORKSHEET_NAME = "Requests"
-SHARED_DRIVE_ID = "0AO88IQGAqsTKUk9PVA"
+SHARED_DRIVE_FOLDER_ID = "0AO88IQGAqsTKUk9PVA"  # Your folder ID inside shared drive
 
+# ===== GOOGLE SHEET & DRIVE SETUP =====
 def get_credentials():
     return service_account.Credentials.from_service_account_file(
         'hybb-creds.json',
@@ -28,10 +29,11 @@ def connect_to_sheet():
     return sheet, creds
 
 def save_image_to_drive(image_data, creds):
+    """Uploads image bytes to Google Drive folder & returns a direct link."""
     service = build('drive', 'v3', credentials=creds)
     file_metadata = {
         'name': f"image_{datetime.now().strftime('%Y%m%d%H%M%S')}.jpg",
-        'parents': [SHARED_DRIVE_ID],
+        'parents': [SHARED_DRIVE_FOLDER_ID],
     }
     media = MediaIoBaseUpload(io.BytesIO(image_data), mimetype='image/jpeg')
     file = service.files().create(
@@ -41,14 +43,17 @@ def save_image_to_drive(image_data, creds):
         supportsAllDrives=True
     ).execute()
     file_id = file.get("id")
-    return f"https://drive.google.com/uc?export=view&id={file_id}"
+    return f"https://drive.google.com/uc?id={file_id}"
 
+# ===== ADMIN LOGIN =====
 def is_admin():
     st.sidebar.markdown("### 🔐 Admin Access")
     password = st.sidebar.text_input("Enter Admin Password", type="password")
     admin_name = st.sidebar.text_input("Your Name/Email (for action log)")
-    return password == st.secrets.get("admin_password", "admin123"), admin_name
+    correct_pass = password == st.secrets.get("admin_password", "admin123")
+    return correct_pass, admin_name.strip()
 
+# ===== MAIN APP =====
 def main():
     st.markdown("""
         <style>.stApp { background-color: #e0f7e9; }</style>
@@ -56,14 +61,16 @@ def main():
 
     st.title("📋 HYBB Utility App")
 
+    # Connect to Google Sheet
     try:
         sheet, creds = connect_to_sheet()
-    except Exception:
-        st.error("⚠️ Cannot access Google Sheet. Please check sharing and API permissions.")
+    except Exception as e:
+        st.error(f"⚠️ Cannot access Google Sheet: {e}")
         st.stop()
 
     menu = st.sidebar.radio("📌 Menu", ["Submit Request", "Dashboard", "Admin Dashboard"])
 
+    # ===== SUBMIT REQUEST =====
     if menu == "Submit Request":
         st.subheader("📸 Submit Request")
         kitchen = st.selectbox("Select Kitchen", ["--Select--", "WFD01", "BSN01", "HSR01", "MAR01", "SKM01"])
@@ -72,7 +79,7 @@ def main():
         picture = st.camera_input("Take Photo (camera only)")
 
         if st.button("Submit Request"):
-            if not all([kitchen != "--Select--", emp_name, emp_id, picture]):
+            if kitchen == "--Select--" or not emp_name or not emp_id or not picture:
                 st.warning("⚠️ Please fill all fields and take a photo.")
             else:
                 img_url = save_image_to_drive(picture.getvalue(), creds)
@@ -83,6 +90,7 @@ def main():
                 ])
                 st.success("✅ Request submitted successfully!")
 
+    # ===== DASHBOARD =====
     elif menu == "Dashboard":
         dashboard_option = st.radio("Select View", ["Tanker Purchase Summary", "Ticket Status"])
 
@@ -105,10 +113,8 @@ def main():
 
         elif dashboard_option == "Ticket Status":
             st.subheader("🎫 Ticket Status")
-
-            # Filters
             kitchen_filter = st.selectbox("Filter by Kitchen", options=["All"] + sorted(df["Kitchen"].unique().tolist()))
-            date_filter = st.date_input("Filter by Date", value=None)
+            date_filter = st.date_input("Filter by Date", value=df["Timestamp"].dropna().min().date())
 
             filtered_df = df.copy()
             if kitchen_filter != "All":
@@ -118,12 +124,13 @@ def main():
 
             st.dataframe(filtered_df)
 
+    # ===== ADMIN DASHBOARD =====
     elif menu == "Admin Dashboard":
         is_admin_user, admin_name = is_admin()
         if not is_admin_user:
             st.warning("🔒 Please enter correct admin password.")
             return
-        if not admin_name.strip():
+        if not admin_name:
             st.warning("Please enter your name/email in the sidebar to access Admin Dashboard.")
             return
 
@@ -160,6 +167,7 @@ def main():
             st.info("No matching requests found.")
             return
 
+        # Loop through requests
         for i, row in filtered_df.iterrows():
             st.markdown("---")
             try:
@@ -192,18 +200,18 @@ def main():
             col1, col2, col3 = st.columns([1,1,4])
             with col1:
                 if st.button(f"Approve {i}", key=f"approve_{i}"):
-                    sheet.update_cell(i + 2, 6, "Approved")
-                    sheet.update_cell(i + 2, 7, admin_name)
+                    sheet.update_cell(i + 2, df.columns.get_loc("Status") + 1, "Approved")
+                    sheet.update_cell(i + 2, df.columns.get_loc("Action_By") + 1, admin_name)
                     st.success(f"Request {i+1} Approved")
             with col2:
                 if st.button(f"Reject {i}", key=f"reject_{i}"):
-                    sheet.update_cell(i + 2, 6, "Rejected")
-                    sheet.update_cell(i + 2, 7, admin_name)
+                    sheet.update_cell(i + 2, df.columns.get_loc("Status") + 1, "Rejected")
+                    sheet.update_cell(i + 2, df.columns.get_loc("Action_By") + 1, admin_name)
                     st.success(f"Request {i+1} Rejected")
             with col3:
                 comment = st.text_area(f"Add Comment (optional) for request {i+1}", value=row["Comments"], key=f"comment_{i}")
                 if st.button(f"Save Comment {i}", key=f"save_comment_{i}"):
-                    sheet.update_cell(i + 2, 8, comment)
+                    sheet.update_cell(i + 2, df.columns.get_loc("Comments") + 1, comment)
                     st.success("Comment saved.")
 
 if __name__ == "__main__":
