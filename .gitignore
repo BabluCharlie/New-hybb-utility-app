@@ -1,0 +1,13 @@
+# Python cache files
+__pycache__/
+*.pyc
+
+# VS Code settings
+.vscode/
+
+# Google service account key file
+hybb-creds.json
+
+# OS-specific files
+.DS_Store
+Thumbs.db
